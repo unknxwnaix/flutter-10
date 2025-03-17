@@ -2,19 +2,49 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
 import 'package:frontend/add_new_task.dart';
 import 'package:frontend/utils.dart';
 import 'package:frontend/widgets/date_selector.dart';
-import 'package:frontend/widgets/task_card.dart';
+import 'widgets/custom_notification.dart';
 
 class MyHomePage extends StatefulWidget {
-  const MyHomePage({super.key});
-
   @override
-  State<MyHomePage> createState() => _MyHomePageState();
+  _MyHomePageState createState() => _MyHomePageState();
 }
 
 class _MyHomePageState extends State<MyHomePage> {
+  DateTime _selectedDate = DateTime.now();
+
+  void _onDateChanged(DateTime newDate) {
+    setState(() {
+      _selectedDate = newDate;
+    });
+  }
+
+  Future<void> _deleteTask(String taskId) async {
+    await FirebaseFirestore.instance.collection('tasks').doc(taskId).delete();
+    showCustomNotification(context, 'Task deleted successfully!', Colors.red);
+  }
+
+  void showCustomNotification(BuildContext context, String message, Color backgroundColor) {
+    final overlay = Overlay.of(context);
+    final overlayEntry = OverlayEntry(
+      builder: (context) => CustomNotification(
+        message: message,
+        backgroundColor: backgroundColor,
+      ),
+    );
+
+    // Вставляем уведомление в Overlay
+    overlay.insert(overlayEntry);
+
+    // Удаляем уведомление через 3 секунды
+    Future.delayed(const Duration(seconds: 3), () {
+      overlayEntry.remove();
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -30,17 +60,18 @@ class _MyHomePageState extends State<MyHomePage> {
                 ),
               );
             },
-            icon: const Icon(
-              CupertinoIcons.add,
-            ),
+            icon: const Icon(CupertinoIcons.add),
           ),
         ],
       ),
-      body: Center(
-        child: Column(
-          children: [
-            const DateSelector(),
-            StreamBuilder(
+      body: Column(
+        children: [
+          DateSelector(
+            onDateSelected: _onDateChanged,
+          ),
+          // Задачи
+          Expanded(
+            child: StreamBuilder(
               stream: FirebaseFirestore.instance
                   .collection("tasks")
                   .where('creator',
@@ -48,72 +79,130 @@ class _MyHomePageState extends State<MyHomePage> {
                   .snapshots(),
               builder: (context, snapshot) {
                 if (snapshot.connectionState == ConnectionState.waiting) {
+                  return const Center(child: CircularProgressIndicator());
+                }
+                if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
                   return const Center(
-                    child: CircularProgressIndicator(),
+                    child: Text('No tasks for this date :('),
                   );
                 }
-                if (!snapshot.hasData) {
-                  return const Text('No data here :(');
+
+                // Фильтруем задачи по выбранной дате
+                final tasks = snapshot.data!.docs.where((doc) {
+                  final taskDate = (doc['date'] as Timestamp).toDate();
+                  return taskDate.year == _selectedDate.year &&
+                         taskDate.month == _selectedDate.month &&
+                         taskDate.day == _selectedDate.day;
+                }).toList();
+
+                if (tasks.isEmpty) {
+                  return const Center(
+                    child: Text('No tasks for this date :('),
+                  );
                 }
 
-                return Expanded(
-                  child: ListView.builder(
-                    itemCount: snapshot.data!.docs.length,
-                    itemBuilder: (context, index) {
-                      return Row(
-                        children: [
-                          Expanded(
-                            child: TaskCard(
-                              color: hexToColor(
-                                  snapshot.data!.docs[index].data()['color']),
-                              headerText:
-                                  snapshot.data!.docs[index].data()['title'],
-                              descriptionText: snapshot.data!.docs[index]
-                                  .data()['description'],
-                              scheduledDate: snapshot.data!.docs[index]
-                                  .data()['date']
-                                  .toString(),
-                            ),
-                          ),
-                          Container(
-                            height: 50,
-                            width: 50,
-                            decoration: BoxDecoration(
-                              color: strengthenColor(
-                                const Color.fromRGBO(246, 222, 194, 1),
-                                0.69,
+                return ListView.builder(
+                  itemCount: tasks.length,
+                  itemBuilder: (context, index) {
+                    var task = tasks[index].data();
+                    Color taskColor = hexToColor(task['color']);
+                    DateTime dateTime = (task['date'] as Timestamp).toDate();
+                    String formattedTime = DateFormat('hh:mm a').format(dateTime);
+
+                    return Dismissible(
+                      key: Key(tasks[index].id),
+                      direction: DismissDirection.endToStart,
+                      background: Container(
+                        alignment: Alignment.centerRight,
+                        padding: const EdgeInsets.only(right: 20),
+                        color: Colors.red,
+                        child: const Icon(
+                          Icons.delete,
+                          color: Colors.white,
+                        ),
+                      ),
+                      onDismissed: (direction) {
+                        _deleteTask(tasks[index].id);
+                      },
+                      child: GestureDetector(
+                        onTap: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (context) => AddNewTask(
+                                task: {
+                                  ...task,
+                                  'id': tasks[index].id,
+                                },
                               ),
-                              image: snapshot.data!.docs[index]
-                                          .data()['imageURL'] ==
-                                      null
-                                  ? null
-                                  : DecorationImage(
-                                      image: NetworkImage(
-                                        snapshot.data!.docs[index]
-                                            .data()['imageURL'],
+                            ),
+                          );
+                        },
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 16, vertical: 8),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.center,
+                            children: [
+                              Expanded(
+                                child: Container(
+                                  padding: const EdgeInsets.all(16),
+                                  decoration: BoxDecoration(
+                                    color: taskColor,
+                                    borderRadius: BorderRadius.circular(16),
+                                  ),
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        task['title'],
+                                        style: const TextStyle(
+                                          fontSize: 18,
+                                          fontWeight: FontWeight.bold,
+                                          color: Colors.black87,
+                                        ),
                                       ),
-                                    ),
-                              shape: BoxShape.circle,
-                            ),
-                          ),
-                          const Padding(
-                            padding: EdgeInsets.all(12.0),
-                            child: Text(
-                              '10:00AM',
-                              style: TextStyle(
-                                fontSize: 17,
+                                      const SizedBox(height: 4),
+                                      Text(
+                                        task['description'],
+                                        style: const TextStyle(
+                                          fontSize: 14,
+                                          color: Colors.black54,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
                               ),
-                            ),
-                          )
-                        ],
-                      );
-                    },
-                  ),
+                              const SizedBox(width: 12),
+                              CircleAvatar(
+                                radius: 25,
+                                backgroundColor: Colors.grey.shade300,
+                                backgroundImage: task['imageURL'] != null
+                                    ? NetworkImage(task['imageURL'])
+                                    : null,
+                                child: task['imageURL'] == null
+                                    ? const Icon(Icons.person,
+                                        color: Colors.grey, size: 30)
+                                    : null,
+                              ),
+                              const SizedBox(width: 8),
+                              Text(
+                                formattedTime,
+                                style: const TextStyle(
+                                    fontSize: 16, fontWeight: FontWeight.w600),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    );
+                  },
                 );
               },
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }

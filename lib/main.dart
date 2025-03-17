@@ -58,7 +58,7 @@ class MyApp extends StatelessWidget {
             );
           }
           if (snapshot.data != null) {
-            return const MyHomePage();
+            return MyHomePage();
           }
           return const SignUpPage();
         },
